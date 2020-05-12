@@ -1,5 +1,3 @@
-require "httparty"
-
 module Cloudflare
   module Rails
     class Railtie < ::Rails::Railtie
@@ -31,62 +29,43 @@ module Cloudflare
       ActionDispatch::RemoteIp.prepend RemoteIpProxies
 
       class Importer
-        include HTTParty
-        base_uri 'https://www.cloudflare.com'
-        follow_redirects true
-        default_options.update(verify: true)
 
-        class ResponseError < HTTParty::ResponseError; end
+        IPS_V4 = %W(
+          173.245.48.0/20
+          103.21.244.0/22
+          103.22.200.0/22
+          103.31.4.0/22
+          141.101.64.0/18
+          108.162.192.0/18
+          190.93.240.0/20
+          188.114.96.0/20
+          197.234.240.0/22
+          198.41.128.0/17
+          162.158.0.0/15
+          104.16.0.0/12
+          172.64.0.0/13
+          131.0.72.0/22
+        ).freeze
 
-        IPS_V4_URL = '/ips-v4'.freeze
-        IPS_V6_URL = '/ips-v6'.freeze
+        IPS_V6 = %w(
+          2400:cb00::/32
+          2606:4700::/32
+          2803:f800::/32
+          2405:b500::/32
+          2405:8100::/32
+          2a06:98c0::/29
+          2c0f:f248::/32
+        ).freeze
 
-        class << self
-          def ips_v6
-            if ::Rails.application.config.cloudflare.ips_v6_file_path.present?
-              fetch_file(::Rails.application.config.cloudflare.ips_v6_file_path)
-            else
-              fetch IPS_V6_URL
-            end
-          end
 
-          def ips_v4
-            if ::Rails.application.config.cloudflare.ips_v4_file_path.present?
-              fetch_file(::Rails.application.config.cloudflare.ips_v4_file_path)
-            else
-              fetch IPS_V4_URL
-            end
-          end
-
-          def fetch(url)
-            resp = get url, timeout: ::Rails.application.config.cloudflare.timeout
-            if resp.success?
-              resp.body.split("\n").reject(&:blank?).map { |ip| IPAddr.new ip }
-            else
-              raise ResponseError, resp.response
-            end
-          end
-
-          def fetch_file(file_path)
-            file = File.open(file_path)
-            file.read.split("\n").reject(&:blank?).map { |ip| IPAddr.new ip }
-          end
-
-          def fetch_with_cache(type)
-            ::Rails.cache.fetch("cloudflare-rails:#{type}", expires_in: ::Rails.application.config.cloudflare.expires_in) do
-              send type
-            end
-          end
+        def self.import
+          IPS_V4 + IPS_V6
         end
       end
 
       # setup defaults before we configure our app.
       DEFAULTS = {
-        expires_in: 12.hours,
-        timeout: 5.seconds,
         ips: [],
-        ips_v4_file_path: nil,
-        ips_v6_file_path: nil,
       }.freeze
 
       config.before_configuration do |app|
@@ -98,15 +77,7 @@ module Cloudflare
       # be correctly setup. we rescue and log errors so that failures won't prevent
       # rails from booting
       config.after_initialize do |app|
-        [:ips_v4, :ips_v6].each do |type|
-          begin
-            ::Rails.application.config.cloudflare.ips += Importer.fetch_with_cache(type)
-          rescue Importer::ResponseError => e
-            ::Rails.logger.error "Cloudflare::Rails: Couldn't import #{type} blocks from CloudFlare: #{e.response}"
-          rescue StandardError => e
-            ::Rails.logger.error "Cloudflare::Rails: Got exception: #{e} for type: #{type}"
-          end
-        end
+        ::Rails.application.config.cloudflare.ips += Importer.import
       end
     end
   end
